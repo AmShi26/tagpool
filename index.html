@@ -168,7 +168,7 @@ tr.is-del{background:#1a0505 !important;}
 
 <div class="header">
   <div class="logo">NUSSBAUM <span>Tag-Pool Analyse</span></div>
-  <div class="header-stats">
+  <div style="font-size:11px;color:#9090b0;margin-right:8px"><span id="sync-status" style="font-size:11px">● Verbinde…</span><br><span style="color:#5a5a7a;font-size:10px">Live-Sync alle 30s</span></div><div class="header-stats">
     <div class="hstat"><div class="hstat-val" id="hs-total">&#8230;</div><div class="hstat-lbl">Tags gesamt</div></div>
     <div class="hstat valid"><div class="hstat-val" id="hs-valid">&#8230;</div><div class="hstat-lbl">Valide</div></div>
     <div class="hstat invalid"><div class="hstat-val" id="hs-invalid">&#8230;</div><div class="hstat-lbl">Versto&szlig;</div></div>
@@ -379,8 +379,71 @@ async function loadSets() {
   try { const r=await window.storage.get(SK_KEPT); if(r&&r.value) JSON.parse(r.value).forEach(t=>keptSet.add(t)); } catch(e){}
   try { const r=await window.storage.get(SK_DEL);  if(r&&r.value) JSON.parse(r.value).forEach(t=>delSet.add(t));  } catch(e){}
 }
-async function saveKept() { try { await window.storage.set(SK_KEPT,JSON.stringify([...keptSet])); } catch(e){} }
-async function saveDel()  { try { await window.storage.set(SK_DEL, JSON.stringify([...delSet]));  } catch(e){} }
+async function saveKept() { try { await window.storage.set(SK_KEPT,JSON.stringify([...keptSet])); } catch(e){} saveToBin(); }
+async function saveDel()  { try { await window.storage.set(SK_DEL, JSON.stringify([...delSet]));  } catch(e){} saveToBin(); }
+
+
+// ===================== JSONBIN SYNC =====================
+const JSONBIN_KEY = '$2a$10$SgdBP72i1AygarFPZov1bePSIdyRsY4jOWyZYaxPdU5wE72ClDVeO';
+const JSONBIN_BIN = '6a22976ff5f4af5e29bcee1e';
+const JSONBIN_URL = 'https://api.jsonbin.io/v3/b/' + JSONBIN_BIN;
+let syncInterval = null;
+let lastSyncHash = '';
+
+function setStatus(state) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  const states = {
+    ok:       { text: '● Verbunden',       color: '#43e97b' },
+    syncing:  { text: '● Synchronisiert…', color: '#f7971e' },
+    error:    { text: '● Fehler',           color: '#ef4444' },
+    offline:  { text: '● Offline',          color: '#9090b0' },
+  };
+  const s = states[state] || states.offline;
+  el.textContent = s.text;
+  el.style.color = s.color;
+}
+
+async function syncFromBin() {
+  try {
+    const r = await fetch(JSONBIN_URL + '/latest', {
+      headers: { 'X-Master-Key': JSONBIN_KEY }
+    });
+    if (!r.ok) { setStatus('error'); return; }
+    const data = await r.json();
+    const record = data.record;
+    const hash = JSON.stringify(record);
+    if (hash === lastSyncHash) { setStatus('ok'); return; }
+    lastSyncHash = hash;
+    // Merge remote into local - remote wins
+    keptSet = new Set(record.kept || []);
+    delSet  = new Set(record.del  || []);
+    updateFolderUI();
+    renderTable();
+    setStatus('ok');
+  } catch(e) { setStatus('error'); }
+}
+
+async function saveToBin() {
+  try {
+    setStatus('syncing');
+    const body = JSON.stringify({ kept: [...keptSet], del: [...delSet] });
+    const r = await fetch(JSONBIN_URL, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY },
+      body
+    });
+    if (!r.ok) { setStatus('error'); return; }
+    lastSyncHash = JSON.stringify({ kept: [...keptSet], del: [...delSet] });
+    setStatus('ok');
+  } catch(e) { setStatus('error'); }
+}
+
+function startSync() {
+  syncFromBin();
+  syncInterval = setInterval(syncFromBin, 30000);
+}
+// ===================== END SYNC =====================
 
 async function init() {
   await loadSets();
@@ -410,6 +473,7 @@ async function init() {
   applyFilters();
   document.getElementById('loading').style.display='none';
   document.getElementById('main-table').style.display='';
+  startSync();
 }
 
 function applyFilters() {
